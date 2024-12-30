@@ -1,0 +1,205 @@
+{
+    "Provider_Object_Map": {
+        "MAPPINGS": {
+            "TIN": [
+                "Name",
+                "Unique_TIN__c"
+            ],
+            "Address": [
+                "Address__c"
+            ],
+            "City": [
+                "City__c"
+            ],
+            "State": [
+                "State__c"
+            ],
+            "Zip": [
+                "Zip__c"
+            ],
+            "Provider": [
+                "Provider_Name__c"
+            ]
+        },
+        "KEYS": {
+            "Provider_TIN__c": "Unique_TIN__c"
+        }
+    },
+    "Account_Object_Map": {
+        "MAPPINGS": {
+            "TIN": [
+                "Tax_ID__c"
+            ],
+            "BillProvAddress1": [
+                "BillingAddress"
+            ],
+            "BillProvCity": [
+                "BillingCity"
+            ],
+            "BillProvState": [
+                "BillingState"
+            ],
+            "BillProvZip": [
+                "BillingPostalCode"
+            ],
+            "Provider": [
+                "Name"
+            ]
+        },
+        "KEYS": {
+            "Account": "Tax_ID__c"
+        }
+    },
+    "Claim_Object_Map": {
+        "MAPPINGS": {
+            "Claim ID": [
+                "Claim_ID__c"
+            ],
+            "TIN": [
+                "Provider_TIN__c"
+            ],
+            "Patient Group/Policy Number": [
+                "Group_Client__c"
+            ],
+            "Claim Number": [
+                "Claim_Number__c"
+            ],
+            "JurisdictionState": [
+                "Jurisdiction__c"
+            ],
+            "Diag Code 1st": [
+                "Diag_Code__c"
+            ],
+            "Diag Code 2nd": [
+                "Diag_Code_2nd__c"
+            ],
+            "Diag Code 3rd": [
+                "Diag_Code_3rd__c"
+            ],
+            "Diag Code 4th": [
+                "Diag_Code_4th__c"
+            ],
+            "Provider": [
+                "Provider__c"
+            ],
+            "Patient": [
+                "Patient__c"
+            ],
+            "Patient ID": [
+                "Patient_ID__c"
+            ],
+            "Date of Birth": [
+                "Date_of_Birth__c"
+            ],
+            "Zip": [
+                "Provider_Zip__c"
+            ],
+            "DRG": [
+                "DRG__c"
+            ],
+            "IsQPA": [
+                "QPA__c"
+            ],
+            "NPI": [
+                "NPI__c"
+            ],
+            "PlaceofService": [
+                "POS__c"
+            ],
+            "Billing Provider Taxonomy": [
+                "Provider_Specialty__c",
+                "Service_Type__c"
+            ]
+        },
+        "KEYS": {
+            "Claims__c": "Claim_ID__c"
+        },
+        "TABLE_CONVERT": {
+            "TIN": {
+                "Provider_TIN__c": [
+                    "Name",
+                    "Id"
+                ]
+            },
+            "Patient Group/Policy Number": {
+                "Groups_Clients__c": [
+                    "Group_Number__c",
+                    "Id"
+                ]
+            },
+            "JurisdictionState": {
+                "Jurisdiction__c": [
+                    "Name",
+                    "Id"
+                ]
+            },
+            "DRG": {
+                "DRG__c": [
+                    "Name",
+                    "Id"
+                ]
+            },
+            "Billing Provider Taxonomy": {
+                "Provider_Specialty__c": [
+                    "Name",
+                    "Id",
+                    "Service_Type__c"
+                ]
+            }
+        }
+    },
+    "Line_Item_Object_Map": {
+        "MAPPINGS": {
+            "Begin DOS": [
+                "DOS__c"
+            ],
+            "Revenue Code": [
+                "Rev_Code__c"
+            ],
+            "Billed Amount": [
+                "Billed_Amount__c"
+            ],
+            "Claim ID": [
+                "RHP_ID__c"
+            ],
+            "Mod": [
+                "Mod__c"
+            ],
+            "Mod (2nd)": [
+                "Mod_2nd__c"
+            ],
+            "Units": [
+                "Units__c"
+            ],
+            "MAR": [
+                "MAR__c"
+            ],
+            "HCPCS/CPT Code": [
+                "HCPCS_CPT_Code__c"
+            ],
+            "Line ID": [
+                "Line_ID__c"
+            ],
+            "4LCodes": [
+                "Exp_Code_2nd__c"
+            ]
+        },
+        "KEYS": {
+            "Line_Items__c": "RHP_ID__c"
+        },
+        "TABLE_CONVERT": {
+            "Claim ID": {
+                "Claims__c": [
+                    "Claim_ID__c",
+                    "Id"
+                ]
+            },
+            "HCPCS/CPT Code": {
+                "HCPCS_CPT_Code__c": [
+                    "Name",
+                    "Id"
+                ]
+            }
+        }
+    }
+}
