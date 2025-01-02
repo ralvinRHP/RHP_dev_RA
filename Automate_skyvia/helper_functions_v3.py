@@ -37,6 +37,55 @@ def salesforce_connection(sandbox=True):
     return sf
 
 
+def read_sftp_directory(remote_dir, host, port, username, password):
+    try:
+        # Connect to the SFTP server using Paramiko
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+
+        with paramiko.SFTPClient.from_transport(transport) as sftp:
+            print("Connection established successfully!")
+
+            # Check if the remote path is a directory
+            if remote_dir:
+                try:
+                    files = sftp.listdir(remote_dir)  # List files in the directory
+                    if not files:
+                        print("The directory is empty.")
+                        return None
+
+                    print(f"Files in directory: {files}")
+
+                    # Iterate over the files and process them
+                    dataframes = {}
+                    for file_name in files:
+                        file_path = f"{remote_dir}/{file_name}"
+                        try:
+                            with sftp.file(file_path, "r") as remote_file_obj:
+                                file_content = remote_file_obj.read().decode("utf-8")
+                                df = pd.read_csv(io.StringIO(file_content))
+                                dataframes[file_name] = df
+                                print(f"File {file_name} read into DataFrame successfully")
+                        except Exception as file_error:
+                            print(f"Failed to process file {file_name}: {file_error}")
+
+                    return dataframes
+
+                except IOError as dir_error:
+                    print(f"Failed to list directory: {dir_error}")
+            else:
+                print("No directory specified. Please set 'remote_dir' in the configuration.")
+
+    except paramiko.AuthenticationException:
+        print("Authentication failed. Please check your credentials.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if 'transport' in locals() and transport.is_active():
+            transport.close()
+            print("Connection closed.")
+
+
 
 def read_sftp_data(remote_path, host, port, username, password):
     try:
@@ -106,37 +155,90 @@ def updated_data_pull(object_names: List[str], sf):
         return store
 
 
-def create_df(source_dict, Source_data, sf):
+
+def data_pull(object_name, id_list, sf):
+    
+    sf_object = getattr(sf, object_name)
+
+    # Retrieve and print field names
+    metadata = sf_object.describe()
+    field_names = [field['name'] for field in metadata['fields']]
+
+    # Construct the SOQL query with ID filtering
+    id_filter = "', '".join(id_list)
+    query = f"SELECT {', '.join(field_names)} FROM {object_name} WHERE Id IN ('{id_filter}')"
+    
+    # Retrieve records
+    records = sf.query(query)
+    all_records = records['records']
+    
+
+    # Handle pagination
+    while not records['done']:
+        records = sf.query_more(records['nextRecordsUrl'], True)
+        all_records.extend(records['records'])
+
+    # Convert to DataFrame
+    df = pd.DataFrame(all_records)
+
+    # Check if DataFrame is empty
+    if df.shape == (0, 0):
+        raise ValueError("DataFrame is empty (shape is (0, 0)). No data retrieved.")
+
+    # Remove Salesforce metadata keys if present
+    df = df.drop(columns=['attributes'], errors='ignore')
+
+    print('pulled data slice!')
+
+    return df
+
+
+
+def create_df(source_dict, Source_data, sf, id_list = None):
+
     new_columns = [col for mapped_cols in source_dict['MAPPINGS'].values() for col in mapped_cols]
     new_df = pd.DataFrame(columns=new_columns)
     keys = source_dict['KEYS']
+
     try:
         Table_convert_cols = list(source_dict['TABLE_CONVERT'].keys())
     except:
         Table_convert_cols = []
+
     for source_col, target_cols in source_dict['MAPPINGS'].items():
         if source_col in Table_convert_cols:
             map_table = source_dict['TABLE_CONVERT'][source_col]
             try:
                 string_ids = [
-                        str(int(float(id))) if pd.notna(id) and id != 'nan' else np.nan
-                        for id in Source_data[source_col]                               #### handeling DRG col
-                    ]
+                    str(int(float(id))) if pd.notna(id) else 'nan'
+                    for id in Source_data[source_col]  # Handling DRG column
+                ]
             except:
                 string_ids = [str(id) for id in Source_data[source_col]]
+                
             Source_data[source_col] = string_ids #### col update to match same type in foreign table
             foreign_table = list(map_table.keys())[0]
             print(f'pulling updated {foreign_table} table')
-            sf_object = updated_data_pull([foreign_table], sf) #### need logic to pull only the records I need rather than the entire table
-    
+        
+            try:
+                sf_object = data_pull(foreign_table, id_list, sf)  #### passing in idlist to prevent pulling entire object
+            except Exception as e:
+                sf_object = None  # Ensure sf_object is set to None if there's an exception
+
+
+            if sf_object is None:
+                sf_object = updated_data_pull([foreign_table], sf) #### need logic to pull only the records I need rather than the entire table
+                
 
 
             merged = Source_data.merge(sf_object.loc[:, map_table[foreign_table]], left_on=source_col, right_on=map_table[foreign_table][0], how='left')
-
+       
+            print(f'Merged {source_col}')
             for i, target_col in enumerate(target_cols):
-                foreign_col = map_table[foreign_table][i + 1]
+
+                foreign_col = map_table[foreign_table][i+1]
                 new_df[target_col] = merged[foreign_col]
-            
+              
 
 
         if source_col not in Table_convert_cols:
@@ -148,8 +250,7 @@ def create_df(source_dict, Source_data, sf):
 
 
     return new_df, keys
-
-
+  
 
 
 
@@ -273,4 +374,3 @@ def delete_record(Ids, keys, sf):
             print(f"Record ID {record_id}: {error_message}")
     else:
         print("All records deleted successfully.")
-        
