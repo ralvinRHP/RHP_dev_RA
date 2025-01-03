@@ -1,0 +1,418 @@
+import pandas as pd
+from simple_salesforce import Salesforce, SalesforceLogin
+import pyodbc, sys, time 
+import requests
+import numpy as np
+from datetime import datetime
+from datetime import datetime
+import pandas as pd
+from typing import List
+import io
+import paramiko
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+############# major update here is fcns are utilizing threading module for faster results
+
+
+
+
+def salesforce_connection(sandbox=True):
+
+    session = requests.Session()
+
+    if sandbox != True:
+        inst = 'Prod'
+        security_token = 'JytX4FFl2pBPdRIaGLjd3aCwT'
+        username = 'ralvin@relianthp.com'
+        password = 'Flash363!'
+        domain = 'login'
+    else:
+        inst = 'sandbox'
+        security_token = 'pIjwc8P0OB2ZisbQYhlKxfLd'
+        username = 'ralvin@relianthp.com.tctdev'
+        password = 'Flash363!'
+        domain = 'test'
+
+    session_id, instance = SalesforceLogin(username=username, password=password, security_token=security_token, domain=domain)
+    sf = Salesforce(instance=instance, session_id=session_id, session=session)
+    print(f'Connected to Salesforce {inst}')
+    return sf
+
+
+def read_sftp_directory(remote_dir, host, port, username, password):
+    try:
+        # Connect to the SFTP server using Paramiko
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+
+        with paramiko.SFTPClient.from_transport(transport) as sftp:
+            print("Connection established successfully!")
+
+            # Check if the remote path is a directory
+            if remote_dir:
+                try:
+                    files = sftp.listdir(remote_dir)  # List files in the directory
+                    if not files:
+                        print("The directory is empty.")
+                        return None
+
+                    print(f"Files in directory: {files}")
+
+                    # Iterate over the files and process them
+                    dataframes = {}
+                    for file_name in files:
+                        file_path = f"{remote_dir}/{file_name}"
+                        try:
+                            with sftp.file(file_path, "r") as remote_file_obj:
+                                file_content = remote_file_obj.read().decode("utf-8")
+                                df = pd.read_csv(io.StringIO(file_content))
+                                dataframes[file_name] = df
+                                print(f"File {file_name} read into DataFrame successfully")
+                        except Exception as file_error:
+                            print(f"Failed to process file {file_name}: {file_error}")
+
+                    return dataframes
+
+                except IOError as dir_error:
+                    print(f"Failed to list directory: {dir_error}")
+            else:
+                print("No directory specified. Please set 'remote_dir' in the configuration.")
+
+    except paramiko.AuthenticationException:
+        print("Authentication failed. Please check your credentials.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if 'transport' in locals() and transport.is_active():
+            transport.close()
+            print("Connection closed.")
+
+
+
+def read_sftp_data(remote_path, host, port, username, password):
+    try:
+        # Step 3: Connect to the SFTP server using Paramiko
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+
+        with paramiko.SFTPClient.from_transport(transport) as sftp:
+            print("Connection established successfully!")
+
+
+            if remote_path:
+                with sftp.file(remote_path, "r") as remote_file_obj:
+                    file_content = remote_file_obj.read().decode("utf-8")
+                    df = pd.read_csv(io.StringIO(file_content))
+                    print("File read into DataFrame successfully")
+            
+            else:
+                print("No file specified to read. Please set 'remote_file' in the configuration.")
+
+    except paramiko.AuthenticationException:
+        print("Authentication failed. Please check your credentials.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if 'transport' in locals() and transport.is_active():
+            transport.close()
+            print("Connection closed.")
+
+    return df
+
+
+
+
+
+
+def updated_data_pull(object_names: List[str], sf):
+    store = {}
+    for i in object_names:
+        sf_object = getattr(sf, i)
+
+        # Retrieve and print field names
+        metadata = sf_object.describe()
+        field_names = [field['name'] for field in metadata['fields']]
+        # print(f"Field names for {i}: {field_names}")
+
+        # Retrieve and print record data
+        query = f"SELECT {', '.join(field_names)} FROM {i}"  # Fetch all fields
+        records = sf.query(query)
+        all_records = records['records']
+
+        # Handle pagination
+        while not records['done']:
+            records = sf.query_more(records['nextRecordsUrl'], True)
+            all_records.extend(records['records'])
+
+        # Convert to DataFrame
+        df = pd.DataFrame(all_records)
+
+        store[i] = df
+        
+
+    if len(store) == 1:
+        print(f'pulled {i}')
+        return store[i]
+    else:
+        return store
+
+
+
+def data_pull(object_name, id_list, sf):
+    
+    sf_object = getattr(sf, object_name)
+
+    # Retrieve and print field names
+    metadata = sf_object.describe()
+    field_names = [field['name'] for field in metadata['fields']]
+
+    # Construct the SOQL query with ID filtering
+    id_filter = "', '".join(id_list)
+    query = f"SELECT {', '.join(field_names)} FROM {object_name} WHERE Id IN ('{id_filter}')"
+    
+    # Retrieve records
+    records = sf.query(query)
+    all_records = records['records']
+    
+
+    # Handle pagination
+    while not records['done']:
+        records = sf.query_more(records['nextRecordsUrl'], True)
+        all_records.extend(records['records'])
+
+    # Convert to DataFrame
+    df = pd.DataFrame(all_records)
+
+    # Check if DataFrame is empty
+    if df.shape == (0, 0):
+        raise ValueError("DataFrame is empty (shape is (0, 0)). No data retrieved.")
+
+    # Remove Salesforce metadata keys if present
+    df = df.drop(columns=['attributes'], errors='ignore')
+
+    print('pulled data slice!')
+
+    return df
+
+
+
+def create_df(source_dict, Source_data, sf, id_list = None):
+
+    new_columns = [col for mapped_cols in source_dict['MAPPINGS'].values() for col in mapped_cols]
+    new_df = pd.DataFrame(columns=new_columns)
+    keys = source_dict['KEYS']
+
+    try:
+        Table_convert_cols = list(source_dict['TABLE_CONVERT'].keys())
+    except:
+        Table_convert_cols = []
+
+    for source_col, target_cols in source_dict['MAPPINGS'].items():
+        if source_col in Table_convert_cols:
+            map_table = source_dict['TABLE_CONVERT'][source_col]
+            try:
+                string_ids = [
+                    str(int(float(id))) if pd.notna(id) else 'nan'
+                    for id in Source_data[source_col]  # Handling DRG column
+                ]
+            except:
+                string_ids = [str(id) for id in Source_data[source_col]]
+                
+            Source_data[source_col] = string_ids #### col update to match same type in foreign table
+            foreign_table = list(map_table.keys())[0]
+            print(f'pulling updated {foreign_table} table')
+        
+            try:
+                sf_object = data_pull(foreign_table, id_list, sf)  #### passing in idlist to prevent pulling entire object
+            except Exception as e:
+                sf_object = None  # Ensure sf_object is set to None if there's an exception
+
+
+            if sf_object is None:
+                sf_object = updated_data_pull([foreign_table], sf) #### need logic to pull only the records I need rather than the entire table
+                
+
+
+            merged = Source_data.merge(sf_object.loc[:, map_table[foreign_table]], left_on=source_col, right_on=map_table[foreign_table][0], how='left')
+       
+            print(f'Merged {source_col}')
+            for i, target_col in enumerate(target_cols):
+
+                foreign_col = map_table[foreign_table][i+1]
+                new_df[target_col] = merged[foreign_col]
+              
+
+
+        if source_col not in Table_convert_cols:
+            if source_col in Source_data.columns:
+                for target_col in target_cols:
+                    new_df[target_col] = Source_data[source_col]
+        
+
+
+
+    return new_df, keys
+  
+
+
+
+from datetime import datetime
+
+
+def format_date(value):
+    try:
+        # Attempt to parse and format the date
+        return datetime.strptime(value, '%m/%d/%Y').strftime('%Y-%m-%d')
+    except (ValueError, TypeError):
+        # Return the value as-is if it’s not a valid date
+        return value
+    
+
+def upsert(new_df, keys, sf):
+
+    object_name = list(keys.keys())[0]
+    sf_object = getattr(sf, object_name)
+    object_key = list(keys.values())[0]
+
+    error_logs = []
+    new_ids = []
+
+    def process_record(record):
+        # Exclude the key field
+        record_upsert = {k: v for k, v in record.items() if k != object_key}
+        # Replace NaN with None
+        record_upsert = {k: (None if pd.isna(v) else v) for k, v in record_upsert.items()}
+        # Format date fields
+        record_upsert = {k: format_date(v) if 'Date' in k or 'DOS' in k else v for k, v in record_upsert.items()}
+
+        try:
+            new_id = sf_object.upsert(f"{object_key}/{record[object_key]}", record_upsert)
+            return new_id, None
+        except Exception as e:
+            return None, e
+    try:
+        with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
+            future_to_record = {
+                executor.submit(process_record, new_df.iloc[i, :].to_dict()): i
+                for i in range(len(new_df))
+            }
+
+            for future in as_completed(future_to_record):
+                idx = future_to_record[future]
+                try:
+                    new_id, error = future.result()
+                    if new_id:
+                        new_ids.append(new_id)
+                    if error:
+                        error_logs.append((idx, error))
+                except Exception as e:
+                    print(f"Unexpected error during future processing: {e}")
+                    error_logs.append((idx, e))
+
+    except Exception as e:
+        print(f"Unexpected error during processing: {e}")
+        error_logs.append(e)
+
+    print(f"Total records inserted: {len(new_ids)}")
+    print(f"Total errors logged: {len(error_logs)}")
+    return new_ids, error_logs
+
+
+def insert_records(new_df, keys, sf):
+    object_name = list(keys.keys())[0]
+    sf_object = getattr(sf, object_name)
+    object_key = list(keys.values())[0]
+
+    error_logs = []
+    new_ids = []
+
+    def process_record(record):
+        # Ensure NPI__c is properly formatted as a string
+        if "NPI__c" in record:
+            record["NPI__c"] = str(int(record["NPI__c"])) if pd.notnull(record["NPI__c"]) else None
+
+        # Exclude the key field and replace NaN with None
+        record_insert = {k: (None if pd.isna(v) else v) for k, v in record.items()}
+        # Format date fields
+        record_insert = {k: format_date(v) if 'Date' in k or 'DOS' in k else v for k, v in record_insert.items()}
+
+        try:
+            # Perform insert
+            new_id = sf_object.create(record_insert)
+            return new_id['id'], None
+        except Exception as e:
+            return None, e
+
+    try:
+        with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
+            future_to_record = {
+                executor.submit(process_record, new_df.iloc[i, :].to_dict()): i
+                for i in range(len(new_df))
+            }
+
+            for future in as_completed(future_to_record):
+                idx = future_to_record[future]
+                try:
+                    new_id, error = future.result()
+                    if new_id:
+                        new_ids.append(new_id)
+                    if error:
+                        error_logs.append((idx, error))
+                except Exception as e:
+                    print(f"Unexpected error during future processing: {e}")
+                    error_logs.append((idx, e))
+
+    except Exception as e:
+        print(f"Unexpected error during processing: {e}")
+        error_logs.append(e)
+
+    print(f"Total records inserted: {len(new_ids)}")
+    print(f"Total errors logged: {len(error_logs)}")
+    return new_ids, error_logs
+
+
+def delete_record(Ids, keys, sf):
+    # Extract Salesforce object name and key field
+    object_name = next(iter(keys.keys()))
+    sf_object = getattr(sf, object_name)
+    print(f"Object: {object_name}, Records to process: {len(Ids)}")
+    
+    errors = []
+
+    # Define the delete task
+    def delete(record_id):
+        try:
+            sf_object.delete(record_id)
+            return None  # No error
+        except Exception as e:
+            return str(e)  # Return error message
+
+    try:
+        # Use ThreadPoolExecutor to parallelize deletions
+        with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
+            future_to_record = {executor.submit(delete, record_id): record_id for record_id in Ids}
+
+            for future in as_completed(future_to_record):
+                record_id = future_to_record[future]
+                try:
+                    error = future.result()
+                    if error:
+                        errors.append((record_id, error))
+                except Exception as e:
+                    print(f"Unexpected error during future processing: {e}")
+                    errors.append((record_id, str(e)))
+
+    except Exception as e:
+        print(f"Unexpected error during processing: {e}")
+        errors.append(("General", str(e)))
+
+    # Report errors
+    if errors:
+        print(f"Errors occurred during deletion:")
+        for record_id, error_message in errors:
+            print(f"Record ID {record_id}: {error_message}")
+    else:
+        print("All records deleted successfully.")
+
+
+    
